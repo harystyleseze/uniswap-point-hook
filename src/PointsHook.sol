@@ -1,33 +1,31 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
  
-import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
+import {IHooks} from "v4-core/interfaces/IHooks.sol";
 import {ERC1155} from "solmate/src/tokens/ERC1155.sol";
  
-import {Currency} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {PoolId} from "v4-core/types/PoolId.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {SwapParams, ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
  
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
  
 import {Hooks} from "v4-core/libraries/Hooks.sol";
  
-contract PointsHook is BaseHook, ERC1155 {
+contract PointsHook is IHooks, ERC1155 {
+    IPoolManager public immutable MANAGER;
+
     constructor(
         IPoolManager _manager
-    ) BaseHook(_manager) {}
- 
-	// Set up hook permissions to return `true`
-	// for the two hook functions we are using
-    function getHookPermissions()
-        public
-        pure
-        override
-        returns (Hooks.Permissions memory)
-    {
-        return
+    ) {
+        MANAGER = _manager;
+        
+        // Validate that the hook address matches the intended permissions
+        // This ensures the afterSwap hook will be called
+        Hooks.validateHookPermissions(
+            this,
             Hooks.Permissions({
                 beforeInitialize: false,
                 afterInitialize: false,
@@ -43,7 +41,67 @@ contract PointsHook is BaseHook, ERC1155 {
                 afterSwapReturnDelta: false,
                 afterAddLiquidityReturnDelta: false,
                 afterRemoveLiquidityReturnDelta: false
-            });
+            })
+        );
+    }
+ 
+    // Implement all IHooks interface methods
+    
+    function beforeInitialize(address, PoolKey calldata, uint160) external pure override returns (bytes4) {
+        return IHooks.beforeInitialize.selector;
+    }
+
+    function afterInitialize(address, PoolKey calldata, uint160, int24) external pure override returns (bytes4) {
+        return IHooks.afterInitialize.selector;
+    }
+
+    function beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
+        external 
+        pure 
+        override 
+        returns (bytes4) 
+    {
+        return IHooks.beforeAddLiquidity.selector;
+    }
+
+    function afterAddLiquidity(
+        address,
+        PoolKey calldata,
+        ModifyLiquidityParams calldata,
+        BalanceDelta,
+        BalanceDelta,
+        bytes calldata
+    ) external pure override returns (bytes4, BalanceDelta) {
+        return (IHooks.afterAddLiquidity.selector, BalanceDelta.wrap(0));
+    }
+
+    function beforeRemoveLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
+        external 
+        pure 
+        override 
+        returns (bytes4) 
+    {
+        return IHooks.beforeRemoveLiquidity.selector;
+    }
+
+    function afterRemoveLiquidity(
+        address,
+        PoolKey calldata,
+        ModifyLiquidityParams calldata,
+        BalanceDelta,
+        BalanceDelta,
+        bytes calldata
+    ) external pure override returns (bytes4, BalanceDelta) {
+        return (IHooks.afterRemoveLiquidity.selector, BalanceDelta.wrap(0));
+    }
+
+    function beforeSwap(address, PoolKey calldata, SwapParams calldata, bytes calldata)
+        external 
+        pure 
+        override 
+        returns (bytes4, BeforeSwapDelta, uint24) 
+    {
+        return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
  
     // Implement the ERC1155 `uri` function
@@ -51,12 +109,16 @@ contract PointsHook is BaseHook, ERC1155 {
         return "https://api.example.com/token/{id}";
     }
  
-    function _afterSwap(address, PoolKey calldata key, SwapParams calldata swapParams, BalanceDelta delta, bytes calldata hookData) internal override returns (bytes4, int128) {
+    function afterSwap(address, PoolKey calldata key, SwapParams calldata swapParams, BalanceDelta delta, bytes calldata hookData) 
+        external 
+        override 
+        returns (bytes4, int128) 
+    {
         // If this is not an ETH-TOKEN pool with this hook attached, ignore
-        if (!key.currency0.isAddressZero()) return (this.afterSwap.selector, 0);
+        if (!key.currency0.isAddressZero()) return (IHooks.afterSwap.selector, 0);
  
         // We only mint points if user is buying TOKEN with ETH
-        if (!swapParams.zeroForOne) return (this.afterSwap.selector, 0);
+        if (!swapParams.zeroForOne) return (IHooks.afterSwap.selector, 0);
  
         // Mint points equal to 20% of the amount of ETH they spent
         // Since it's a zeroForOne swap:
@@ -73,7 +135,25 @@ contract PointsHook is BaseHook, ERC1155 {
         // Mint the points
         _assignPoints(key.toId(), hookData, pointsForSwap);
  
-        return (this.afterSwap.selector, 0);
+        return (IHooks.afterSwap.selector, 0);
+    }
+
+    function beforeDonate(address, PoolKey calldata, uint256, uint256, bytes calldata)
+        external 
+        pure 
+        override 
+        returns (bytes4) 
+    {
+        return IHooks.beforeDonate.selector;
+    }
+
+    function afterDonate(address, PoolKey calldata, uint256, uint256, bytes calldata)
+        external 
+        pure 
+        override 
+        returns (bytes4) 
+    {
+        return IHooks.afterDonate.selector;
     }
 
     function _assignPoints(PoolId poolId, bytes calldata hookData, uint256 points) internal {
